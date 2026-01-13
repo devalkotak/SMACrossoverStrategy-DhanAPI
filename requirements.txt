@@ -1,0 +1,5 @@
+pandas
+xlwings
+Dhan-Tradehull
+TA-Lib
+openpyxl
