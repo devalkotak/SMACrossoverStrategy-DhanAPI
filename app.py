@@ -14,6 +14,8 @@ WATCHLIST           = ['NIFTY', 'RELIANCE']
 EXCHANGE            = 'NSE'
 TIMEFRAME           = '5'       # Candle timeframe
 MAX_TRADES_PER_DAY  = 5         # Per stock
+SMA_PERIOD_1       = 10        # Period for first SMA
+SMA_PERIOD_2       = 20        # Period for second SMA
 
 # 2. Risk Management
 QUANTITY            = 50        
@@ -74,7 +76,7 @@ def main():
                     continue 
 
                 # --- B. ENTRY LOGIC (If No Position) ---
-                chart = tu.get_historical_data_safe(tsl, name, EXCHANGE, TIMEFRAME)
+                chart = tu.get_historical_data_safe(tsl, name, EXCHANGE, TIMEFRAME, SMA_PERIOD_1, SMA_PERIOD_2)
                 if chart is None: continue
 
                 last_completed_time = chart.index[-2]

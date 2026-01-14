@@ -72,16 +72,15 @@ def save_to_csv(completed_orders):
     except Exception as e:
         logging.error(f"Failed to save CSV: {e}")
 
-def get_historical_data_safe(tsl, name, exchange, timeframe):
+def get_historical_data_safe(tsl, name, exchange, timeframe, n1, n2):
     """Fetches data, calculates Indicators, and handles API errors."""
     try:
         chart = tsl.get_historical_data(tradingsymbol=name, exchange=exchange, timeframe=timeframe)
         if chart is None or chart.empty: 
             return None
-        
         # --- ADD INDICATORS HERE ---
-        chart['sma10'] = talib.SMA(chart['close'], timeperiod=10)
-        chart['sma20'] = talib.SMA(chart['close'], timeperiod=20)
+        chart['sma{n1}'] = talib.SMA(chart['close'], timeperiod=n1)
+        chart['sma{n2}'] = talib.SMA(chart['close'], timeperiod=n2)
         return chart
     except Exception as e:
         logging.error(f"Data Fetch Error {name}: {e}")
