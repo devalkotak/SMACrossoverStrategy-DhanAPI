@@ -72,15 +72,12 @@ def save_to_csv(completed_orders):
     except Exception as e:
         logging.error(f"Failed to save CSV: {e}")
 
-def get_historical_data_safe(tsl, name, exchange, timeframe, n1, n2):
+def get_historical_data_safe(tsl, name, exchange, timeframe):
     """Fetches data, calculates Indicators, and handles API errors."""
     try:
         chart = tsl.get_historical_data(tradingsymbol=name, exchange=exchange, timeframe=timeframe)
         if chart is None or chart.empty: 
             return None
-        # --- ADD INDICATORS HERE ---
-        chart['sma{n1}'] = talib.SMA(chart['close'], timeperiod=n1)
-        chart['sma{n2}'] = talib.SMA(chart['close'], timeperiod=n2)
         return chart
     except Exception as e:
         logging.error(f"Data Fetch Error {name}: {e}")
@@ -90,7 +87,7 @@ def get_historical_data_safe(tsl, name, exchange, timeframe, n1, n2):
 #          STRATEGY LOGIC
 # ==========================================
 
-def check_crossover(chart):
+def check_sma_crossover(chart, n1, n2):
     """
     Checks for SMA Crossover on the LAST COMPLETED candle.
     Index -1 = Current forming candle (IGNORE)
@@ -98,10 +95,10 @@ def check_crossover(chart):
     Index -3 = Previous completed candle (USE THIS)
     """
     try:
-        sma10_prev = chart['sma10'].iloc[-3]
-        sma20_prev = chart['sma20'].iloc[-3]
-        sma10_curr = chart['sma10'].iloc[-2]
-        sma20_curr = chart['sma20'].iloc[-2]
+        sma10_prev = chart['sma{n1}'].iloc[-3]
+        sma20_prev = chart['sma{n2}'].iloc[-3]
+        sma10_curr = chart['sma{n1}'].iloc[-2]
+        sma20_curr = chart['sma{n2}'].iloc[-2]
         
         return sma10_prev < sma20_prev and sma10_curr > sma20_curr
     except IndexError:
@@ -207,7 +204,7 @@ def paper_exit(orderbook, completed_orders, name, ltp, current_time, remark):
     orderbook[name] = get_empty_order_template()
     return True
 
-def check_sl_tp_exit(orderbook, completed_orders, name, ltp, current_time):
+def check_sl_tp_exit(orderbook, name, ltp, current_time):
     """Checks active orders for Exit conditions."""
     order = orderbook[name]
     if order['status'] != 'ACTIVE': return False
@@ -224,7 +221,4 @@ def check_sl_tp_exit(orderbook, completed_orders, name, ltp, current_time):
     if current_time > order['max_holding_time']:
         exit_triggered, remark = True, "Time Exit"
 
-    if exit_triggered:
-        return paper_exit(orderbook, completed_orders, name, ltp, current_time, remark)
-    
-    return False
+    return exit_triggered, orderbook, remark

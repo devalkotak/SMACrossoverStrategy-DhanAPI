@@ -4,6 +4,7 @@ import logging
 from Dhan_Tradehull import Tradehull
 import credentials
 import trade_utils as tu 
+import talib
 
 # ==========================================
 #        USER CONFIGURATION SECTION
@@ -14,8 +15,10 @@ WATCHLIST           = ['NIFTY', 'RELIANCE']
 EXCHANGE            = 'NSE'
 TIMEFRAME           = '5'       # Candle timeframe
 MAX_TRADES_PER_DAY  = 5         # Per stock
-SMA_PERIOD_1       = 10        # Period for first SMA
-SMA_PERIOD_2       = 20        # Period for second SMA
+SMA_PERIOD_1        = 10        # Period for first SMA
+SMA_PERIOD_2        = 20        # Period for second SMA
+USE_EXCEL_OUTPUT    = True
+MARGIN_CHECK        = True
 
 # 2. Risk Management
 QUANTITY            = 50        
@@ -43,7 +46,8 @@ logging.basicConfig(
 tsl = Tradehull(client_id=credentials.client_id, access_token=credentials.access_token)
 
 # Setup
-live_sheet, comp_sheet = tu.setup_sheets()
+if USE_EXCEL_OUTPUT:
+    live_sheet, comp_sheet = tu.setup_sheets()
 completed_orders = []
 orderbook = {name: tu.get_empty_order_template() for name in WATCHLIST}
 last_candle_processed = {name: None for name in WATCHLIST}
@@ -71,21 +75,27 @@ def main():
                 
                 # --- A. EXIT LOGIC (If Position exists) ---
                 if orderbook[name]['status'] == 'ACTIVE':
-                    if tu.check_sl_tp_exit(orderbook, completed_orders, name, ltp, now):
+                    exit_triggered, orderbook, remark = tu.check_sl_tp_exit(orderbook, name, ltp, now)
+                    if exit_triggered:
+                        tu.paper_exit(orderbook, completed_orders, name, ltp, now, remark)
                         update_excel = True
                     continue 
 
                 # --- B. ENTRY LOGIC (If No Position) ---
-                chart = tu.get_historical_data_safe(tsl, name, EXCHANGE, TIMEFRAME, SMA_PERIOD_1, SMA_PERIOD_2)
+                chart = tu.get_historical_data_safe(tsl, name, EXCHANGE, TIMEFRAME)
+                chart['sma{SMA_PERIOD_1}'] = talib.SMA(chart['close'], timeperiod=SMA_PERIOD_1)
+                chart['sma{SMA_PERIOD_2}'] = talib.SMA(chart['close'], timeperiod=SMA_PERIOD_2)  
                 if chart is None: continue
-
                 last_completed_time = chart.index[-2]
                 
+
+                #Entry Conditions
                 if last_candle_processed[name] != last_completed_time:
-                    is_crossover = tu.check_crossover(chart)
+                    is_crossover = tu.check_sma_crossover(chart, SMA_PERIOD_1, SMA_PERIOD_2)
                     trades_today = len([o for o in completed_orders if o['name'] == name])
+                    can_trade    = trades_today < MAX_TRADES_PER_DAY
                     
-                    if is_crossover and trades_today < MAX_TRADES_PER_DAY:
+                    if is_crossover and can_trade:
                         tu.paper_entry(
                             orderbook, name, ltp, 'BUY', 
                             QUANTITY, SL_PERCENT, TP_PERCENT, MAX_HOLDING_MINUTES
@@ -100,7 +110,7 @@ def main():
                 break
 
             # 4. Excel Update
-            if update_excel:
+            if update_excel and USE_EXCEL_OUTPUT:
                 tu.update_sheets(live_sheet, comp_sheet, orderbook, completed_orders)
             
             time.sleep(1)
