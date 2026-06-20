@@ -1,69 +1,41 @@
-# Quantitative SMA Momentum Engine (Paper Trading Module)
+# SMA Crossover Trading Bot (Dhan API)
 
-## Overview
-This repository contains a modular, polling-based algorithmic trading system designed for the Dhan API ecosystem. The current implementation focuses on a **Paper Trading** environment to simulate Simple Moving Average (SMA) crossover strategies with high-fidelity signal processing and risk management protocols.
+A paper-trading bot for the Dhan API that runs a simple moving average crossover strategy on NSE stocks. I built it to understand how a polling-based trading loop works end to end: pulling live data, generating signals, managing positions, and tracking PnL, without putting real money on the line.
 
-The architecture is built to decouple strategy logic from execution routing, allowing for seamless transition from forward-testing (paper) to live order placement with minimal refactoring.
+It only paper trades. Orders are simulated in memory and never sent to the exchange. The strategy logic is kept separate from execution, so it could be pointed at live orders later without rewriting the strategy.
 
-## System Architecture
+## How it works
 
-### 1. Polling Engine (`app.py`)
-The core event loop operates on a synchronous polling mechanism that queries market data at defined intervals. It serves as the "Controller," orchestrating data ingestion, signal validation, and state updates.
-* **Latency Management:** Utilizes batched LTP requests to minimize network overhead.
-* **State Persistence:** Maintains an in-memory `orderbook` structure to track active positions and preclude signal duplication.
+- `app_v1.0.2.py` is the main loop. It polls during market hours, fetches the last price for the whole watchlist in one call, and for each ticker either looks for an entry (if flat) or checks exit conditions (if in a position). Each ticker is tracked as a small state machine (empty, active, closed) so entry and exit logic never overlap.
+- `trade_utils.py` holds the strategy and a simulated broker: the crossover check, paper entry/exit, JSON trade logging, and CSV export.
 
-### 2. Strategy & Execution Library (`trade_utils.py`)
-A utility module encapsulating the business logic, mathematical computations, and logging subsystems.
-* **Signal Processing:** Implements a strict `[t-2]` and `[t-3]` candle indexing method to eliminate look-ahead bias (repainting).
-* **Virtual Order Management:** Simulates broker-side execution for Entry, Stop-Loss (SL), and Take-Profit (TP) orders.
-* **Data Serialization:** JSON-formatted logging for granular analysis of order states.
+A few things I wanted to get right:
 
-## Key Features
+- **No repainting.** A forming candle's price changes every second, which makes indicators flicker. The signal logic only uses the last closed candle, and a memory pointer locks the decision for that candle until the next one closes, so a signal can't fire twice on the same candle.
+- **Risk cutoff.** It tracks total realized and unrealized PnL and shuts the engine down if the drawdown crosses `GLOBAL_MAX_LOSS`.
+- **Live view.** Trade status and PnL are pushed to an Excel sheet via xlwings while it runs, and the full trade history is written to CSV on exit.
 
-* **Repaint-Proof Execution:** Logic validates crossovers strictly on completed candles, ensuring signals remain static once generated.
-* **Real-time Dashboard:** Integrates with `xlwings` to push live trade status and PnL metrics to a local Excel instance.
-* **Global Risk Circuit Breaker:** Monitors aggregate realized and unrealized PnL, terminating the engine if the drawdown exceeds the defined `GLOBAL_MAX_LOSS`.
-* **Whipsaw Protection:** Implements a `last_candle_processed` memory pointer to prevent multiple entries on a single 5-minute candle.
-* **Data Export:** Automatic serialization of trade history to CSV upon termination (SIGINT or Risk Exit).
+## Config
 
-## Configuration
+Settings live at the top of `app_v1.0.2.py`:
 
-All strategy parameters are exposed in the `USER CONFIGURATION` section of `app.py`:
+| Setting | Meaning | Default |
+|---|---|---|
+| `WATCHLIST` | NSE symbols to trade | `['NIFTY', 'RELIANCE']` |
+| `TIMEFRAME` | Candle size in minutes | `5` |
+| `SL_PERCENT` | Stop loss | `0.5%` |
+| `TP_PERCENT` | Take profit | `1.0%` |
+| `MAX_HOLDING_MINUTES` | Time-based exit | `180` |
 
-| Parameter | Description | Default |
-| :--- | :--- | :--- |
-| `WATCHLIST` | List of trading symbols (NSE) | `['NIFTY', 'RELIANCE']` |
-| `TIMEFRAME` | Candle interval for calculation | `'5'` (Minutes) |
-| `SL_PERCENT` | Static Stop Loss percentage | `0.5%` |
-| `TP_PERCENT` | Static Take Profit percentage | `1.0%` |
-| `MAX_HOLDING_MINUTES` | Time-based exit threshold | `180` |
+## Running it
 
-## Installation & Usage
+1. `pip install -r requirements.txt` (TA-Lib may need a separate binary install depending on your OS)
+2. Put your Dhan `client_id` and `access_token` in `credentials.py`
+3. Set the watchlist and risk parameters at the top of `app_v1.0.2.py`
+4. `python app_v1.0.2.py`
 
-1.  **Dependencies:**
-    Ensure the requisite libraries are installed. Note that `TA-Lib` may require binary installation depending on the OS.
-    ```bash
-    pip install pandas xlwings Dhan-Tradehull TA-Lib
-    ```
+It runs during market hours and prints signals and fills as they happen. On exit it writes the dashboard (`PaperTrade_{date}.xlsx`), logs (`strategy_logs.log`), and a final `TradeLog_{timestamp}.csv`.
 
-2.  **Authentication:**
-    Place a `credentials.py` file in the root directory containing your Dhan API keys:
-    ```python
-    client_id = "YOUR_CLIENT_ID"
-    access_token = "YOUR_JWT_TOKEN"
-    ```
+## Note
 
-3.  **Execution:**
-    Run the controller script:
-    ```bash
-    python app.py
-    ```
-
-## Output Artifacts
-
-* **`PaperTrade_{Date}.xlsx`**: Live dashboard for monitoring active positions.
-* **`strategy_logs.log`**: Detailed system logs including JSON dumps of every order event.
-* **`TradeLog_{Timestamp}.csv`**: Final trade report generated upon session termination.
-
-## Disclaimer
-This software is intended for educational and testing purposes only. The paper trading module simulates market mechanics but does not account for slippage, liquidity constraints, or broker-side latency. Use at your own risk.
+Educational and paper-trading only. It simulates market mechanics but does not model slippage, liquidity, or broker latency.
