@@ -1,70 +1,47 @@
-# Technical Documentation: SMA Algo v1
+# How the SMA bot works
 
-## 1. Introduction
-This document provides a comprehensive technical breakdown of the SMA Crossover Algorithm. The system is designed as a **Finite State Machine (FSM)** where each asset in the watchlist transitions between states (`EMPTY`, `ACTIVE`, `CLOSED`) based on market data and strategy logic.
+Notes on the internals, mostly for my own reference. Each symbol in the watchlist is handled as a small state machine with three states: empty (no position), active (in a trade), and closed.
 
-## 2. File Structure Analysis
+## app_v1.0.2.py (the loop)
 
-### A. `app.py` (The Controller)
-This file is the entry point of the application. It runs an infinite `while` loop that acts as the heartbeat of the system.
+The entry point. It runs a `while` loop that repeats every second.
 
-**Key Logic Blocks:**
-1.  **Time Gatekeeping:**
-    * Before fetching data, the system checks `dt.datetime.now()`.
-    * If outside `START_TIME` and `END_TIME`, the loop sleeps for 10 seconds to conserve resources and API limits.
+**Time check.** Each pass compares the current time against `START_TIME` and `END_TIME`. Outside market hours it just sleeps 10 seconds so it isn't hitting the API for no reason.
 
-2.  **Data Ingestion:**
-    * `tsl.get_ltp(names=WATCHLIST)`: This is optimized to fetch prices for *all* stocks in a single API call, reducing HTTP overhead.
-    * `tu.get_historical_data_safe(...)`: Fetches OHLC data for individual tickers to calculate indicators.
+**Data.** `tsl.get_ltp(names=WATCHLIST)` pulls the last price for every symbol in one call, which is cheaper than one call per symbol. `tu.get_historical_data_safe(...)` then pulls OHLC per ticker to compute the moving averages.
 
-3.  **The State Loop:**
-    For every ticker in the watchlist, the code checks the `status` flag in the `orderbook`:
-    * **If `ACTIVE`:** It bypasses entry logic and strictly checks for Exit Conditions (SL, TP, Time).
-    * **If `EMPTY`:** It bypasses exit logic and checks for Entry Signals (SMA Crossover).
+**State loop.** For each ticker it checks the `status` in the `orderbook`:
+- active: skip entry logic, only check exits (stop loss, take profit, time)
+- empty: skip exit logic, only check for an entry signal (the crossover)
 
-4.  **The "Repainting" Fix:**
-    One of the most critical logic implementations is the candle indexing:
-    ```python
-    last_completed_time = chart.index[-2]
-    if last_candle_processed[name] != last_completed_time:
-         # Check Signal
-    ```
-    * **The Problem:** In a live 5-minute candle (e.g., 9:15-9:20), the close price changes every second. This causes indicators to flicker.
-    * **The Solution:** The code ignores index `-1` (the forming candle) and only makes decisions based on index `-2` (the last fully closed candle).
-    * **The Memory Pointer:** `last_candle_processed` ensures that once a decision is made for the 9:15 candle, the logic is **locked** until the 9:20 candle closes.
+**The repainting fix.** This is the part I cared most about. A live 5-minute candle (say 9:15 to 9:20) keeps changing price until it closes, so any indicator built on it flickers. The fix is to ignore the forming candle (index -1) and only act on the last fully closed one (index -2):
 
-### B. `trade_utils.py` (The Library)
-This file contains pure functions. It does not store state; it only manipulates the data passed to it.
+```python
+last_completed_time = chart.index[-2]
+if last_candle_processed[name] != last_completed_time:
+    # check signal
+```
 
-**Key Functions:**
-1.  **`paper_entry` & `paper_exit`:**
-    * These functions simulate the behavior of a broker.
-    * Instead of sending an HTTP request to an exchange, they update a local dictionary (`orderbook`) and append to a list (`completed_orders`).
-    * **Logging:** These functions use `json.dumps` to log the entire state of the trade. This allows for post-trade debugging (e.g., "Why did my SL hit? I can see the exact SL price calculated in the logs.").
+`last_candle_processed` is a per-ticker pointer. Once a decision is made for the 9:15 candle it stays locked until the 9:20 candle closes, so the same candle can't trigger two entries.
 
-2.  **`check_crossover`:**
-    * Encapsulates the mathematical logic: `SMA(t-1) > SMA(t-1)` AND `SMA(t-2) < SMA(t-2)`.
-    * Wrapped in a `try-except` block to prevent crashes during the first few minutes of the market open when sufficient data might not exist for a 20-period SMA.
+## trade_utils.py (the functions)
 
-3.  **`save_to_csv`:**
-    * Triggered only on exit.
-    * Converts the list of dictionaries `completed_orders` into a Pandas DataFrame and writes it to disk. This is essential for backtesting the performance of the forward test.
+Stateless helpers. They don't hold any state of their own, they just act on whatever is passed in.
 
-## 3. Data Flow Diagram
+- `paper_entry` / `paper_exit`: stand in for a broker. Instead of sending an order to the exchange they update the local `orderbook` dict and append to `completed_orders`. Both dump the full trade state with `json.dumps`, so I can go back later and see exactly why a stop or target fired.
+- `check_crossover`: the signal. A crossover means the fast SMA was below the slow SMA on the previous closed candle and is above it on the latest one. It's wrapped in a try/except because right after open there often isn't enough data for a 20-period SMA yet.
+- `save_to_csv`: runs on exit. Turns `completed_orders` into a pandas DataFrame and writes it out, so I can review the forward test afterward.
 
-1.  **Loop Start** -> Check Time
-2.  **Fetch Data** -> Get LTP & OHLC
-3.  **Check State** (`orderbook['status']`)
-    * *Case A: Active Position*
-        * Check Current LTP vs `stoploss` and `target_price`.
-        * If Hit -> Call `paper_exit` -> Update Excel -> Write to Log.
-    * *Case B: No Position*
-        * Check `last_candle_processed`.
-        * If New Candle -> Calculate SMA.
-        * If Crossover -> Call `paper_entry` -> Update Excel -> Write to Log.
-4.  **Risk Check** -> Sum(PnL) < Max Loss?
-5.  **Sleep** -> Wait 1 second -> Repeat.
+## One pass through the loop
 
-## 4. Latency & Optimization
-* **Network:** The script makes 1 LTP call per loop (fast) and `N` historical data calls (slow).
-* **Excel:** The expensive `update_sheets` function is gated behind an `update_excel` boolean flag. It ONLY runs when a trade actually occurs, keeping the loop speed high (sub-second) during 99% of the runtime.
+1. Check the time.
+2. Fetch LTP and OHLC.
+3. For each ticker, check `orderbook['status']`:
+   - in a position: compare LTP against `stoploss` and `target_price`; if either is hit, call `paper_exit`, update Excel, log it.
+   - flat: if there's a new closed candle, recompute the SMAs; on a crossover, call `paper_entry`, update Excel, log it.
+4. Sum the PnL and stop everything if it's past the max loss.
+5. Sleep one second and repeat.
+
+## Speed
+
+Each loop makes one fast LTP call plus N slower historical calls (one per ticker). The Excel update is the expensive part, so it's gated behind a flag and only runs when a trade actually happens. The rest of the time the loop stays under a second.
