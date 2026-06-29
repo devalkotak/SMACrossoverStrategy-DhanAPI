@@ -1,0 +1,8 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+strategy_logs.log
+PaperTrade_*.xlsx
+TradeLog_*.csv

@@ -30,7 +30,7 @@ Settings live at the top of `app_v1.0.2.py`:
 ## Running it
 
 1. `pip install -r requirements.txt` (TA-Lib may need a separate binary install depending on your OS)
-2. Put your Dhan `client_id` and `access_token` in `credentials.py`
+2. Set `DHAN_CLIENT_ID` and `DHAN_ACCESS_TOKEN` in your environment or local `.env` file
 3. Set the watchlist and risk parameters at the top of `app_v1.0.2.py`
 4. `python app_v1.0.2.py`
 
